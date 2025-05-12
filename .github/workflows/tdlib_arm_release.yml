@@ -1,4 +1,5 @@
-name: TDLib ARM Release (GitHub Hosted)
+# .github/workflows/tdlib-arm-release.yml
+name: TDLib ARM Release
 
 on:
   workflow_dispatch:
@@ -9,24 +10,24 @@ on:
         default: ''
 
 jobs:
-  linux:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    name: Build on ${{ matrix.arch }}
     strategy:
       matrix:
         arch: [armv7, aarch64]
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Determine Release Info
-        shell: bash
+        id: release-info
         run: |
           if [[ "${{ github.event.inputs.commit }}" == "master" || -z "${{ github.event.inputs.commit }}" ]]; then
             echo "release_name=tdlib-latest-ubuntu-${{ matrix.arch }}" >> $GITHUB_ENV
@@ -36,14 +37,13 @@ jobs:
             echo "release_version=${{ github.event.inputs.commit }}" >> $GITHUB_ENV
           fi
 
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Build TDLib
+      - name: Build with Docker
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/arm/v7,linux/arm64
+          platforms: |
+            linux/arm/v7
+            linux/arm64
           build-args: |
             ARCH=${{ matrix.arch }}
             TD_VERSION=${{ env.release_version }}
@@ -55,9 +55,10 @@ jobs:
           tar -czvf ${{ env.release_name }}-for-java.tar.gz tdlib/*
           mv *.tar.gz ../
 
-      - name: Upload Release Asset
+      - name: Upload Release
         uses: softprops/action-gh-release@v1
         with:
           files: ${{ env.release_name }}-for-java.tar.gz
+          tag_name: tdlib-${{ env.release_version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

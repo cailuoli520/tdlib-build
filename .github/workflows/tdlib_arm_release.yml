@@ -16,9 +16,9 @@ jobs:
       matrix:
         include:
           - arch: armv7
-            distro: ubuntu18.04
+            distro: ubuntu20.04
           - arch: aarch64
-            distro: ubuntu18.04
+            distro: ubuntu20.04
     steps:
       - if: ${{ github.event.inputs.commit == 'master' || github.event.inputs.commit == '' }}
         run: |

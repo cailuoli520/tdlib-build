@@ -1,4 +1,5 @@
-name: TDLib ARM Release
+name: TDLib ARM Release (GitHub Hosted)
+
 on:
   workflow_dispatch:
     inputs:
@@ -9,105 +10,54 @@ on:
 
 jobs:
   linux:
-    runs-on: self-hosted
-    timeout-minutes: 10000
-    name: Build on ${{ matrix.distro }} ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    name: Build on ${{ matrix.arch }}
     strategy:
       matrix:
-        include:
-          - arch: armv7
-            distro: ubuntu20.04
-          - arch: aarch64
-            distro: ubuntu20.04
+        arch: [armv7, aarch64]
     steps:
-      - if: ${{ github.event.inputs.commit == 'master' || github.event.inputs.commit == '' }}
-        run: |
-          echo "release_name=tdlib-latest-${{ matrix.distro }}-${{ matrix.arch }}" >> $GITHUB_ENV
-          echo "release_version=latest" >> $GITHUB_ENV
-      - if: ${{ github.event.inputs.commit != 'master' && github.event.inputs.commit != '' }}
-        run: |
-          echo "release_name=tdlib-${{ github.event.inputs.commit }}-${{ matrix.distro }}-${{ matrix.arch }}" >> $GITHUB_ENV
-          echo "release_version=${{ github.event.inputs.commit }}" >> $GITHUB_ENV
-      - uses: actions/checkout@v3
-      - uses: uraimo/run-on-arch-action@v2.2.0
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
         with:
-          arch: ${{ matrix.arch }}
-          distro: ${{ matrix.distro }}
-          setup: |
-            mkdir -p -v "${PWD}/tdlib"
-          dockerRunArgs: |
-            --volume "${PWD}/tdlib:/root/tdlib"
-          env: | 
-            arch: ${{ matrix.arch }}
-            release_name: ${{ env.release_name }}
-            release_version: ${{ env.release_version }}
-          install: |
-            case "${{ matrix.distro }}" in
-              ubuntu*|jessie|stretch|buster|bullseye)
-                apt-get update -q -y
-                apt-get install -q -y make git zlib1g-dev libssl-dev gperf php-cli cmake openjdk-8-jdk-headless clang-6.0 libc++-dev libc++abi-dev wget
-                ;;
-              fedora*)
-                dnf -y update
-                dnf -y install make git zlib1g-dev libssl-dev gperf php-cli cmake openjdk-8-jdk-headless clang-6.0 libc++-dev libc++abi-dev wget
-                ;;
-              alpine*)
-                apk update
-                apk add make git zlib1g-dev libssl-dev gperf php-cli cmake openjdk-8-jdk-headless clang-6.0 libc++-dev libc++abi-dev wget
-                ;;
-            esac
+          platforms: arm
 
-          run: |
-            cd /root
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-            export JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF8
+      - name: Determine Release Info
+        shell: bash
+        run: |
+          if [[ "${{ github.event.inputs.commit }}" == "master" || -z "${{ github.event.inputs.commit }}" ]]; then
+            echo "release_name=tdlib-latest-ubuntu-${{ matrix.arch }}" >> $GITHUB_ENV
+            echo "release_version=latest" >> $GITHUB_ENV
+          else
+            echo "release_name=tdlib-${{ github.event.inputs.commit }}-ubuntu-${{ matrix.arch }}" >> $GITHUB_ENV
+            echo "release_version=${{ github.event.inputs.commit }}" >> $GITHUB_ENV
+          fi
 
-            if [ $arch = "armv7" ]; then
-              export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-armhf
-              wget -P /usr/lib/jvm/java-8-openjdk-armhf/include https://raw.githubusercontent.com/xkaers/tdlib-build/main/jawt.h
-            elif [ $arch = "aarch64" ]; then
-              export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-arm64
-              wget -P /usr/lib/jvm/java-8-openjdk-arm64/include https://raw.githubusercontent.com/xkaers/tdlib-build/main/jawt.h
-            elif [ $arch = "s390x" ]; then
-              export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-s390x
-              wget -P /usr/lib/jvm/java-8-openjdk-s390x/include https://raw.githubusercontent.com/xkaers/tdlib-build/main/jawt.h
-            elif [ $arch = "ppc64le" ]; then
-              export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-ppc64el
-              wget -P /usr/lib/jvm/java-8-openjdk-ppc64el/include https://raw.githubusercontent.com/xkaers/tdlib-build/main/jawt.h
-            else
-              echo "do nothing........"
-            fi
-            
-            if [ $release_version = "latest" ]; then
-              git clone https://github.com/tdlib/td.git
-            else
-              git clone --branch $release_version https://github.com/tdlib/td.git
-            fi
-            
-            cd td
-            rm -rf build
-            mkdir build
-            cd build
-            CXXFLAGS="-stdlib=libc++" CC=/usr/bin/clang-6.0 CXX=/usr/bin/clang++-6.0 cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=../example/java/td -DTD_ENABLE_JNI=ON ..
-            cmake --build . --target install
-            cd ..
-            cd example/java
-            rm -rf build
-            mkdir build
-            cd build
-            CXXFLAGS="-stdlib=libc++" CC=/usr/bin/clang-6.0 CXX=/usr/bin/clang++-6.0 cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=../../../tdlib -DTd_DIR:PATH=$(readlink -e ../td/lib/cmake/Td) ..
-            cmake --build . --target install
-            cd ..
-            cp -r org/ ../../tdlib
-            cd ../..
-            tar -czvf ${release_name}-for-java.tar.gz tdlib/*
-            cp ${release_name}-for-java.tar.gz ../tdlib
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Upload artifact to release
-        uses: svenstaro/upload-release-action@v2
+      - name: Build TDLib
+        uses: docker/build-push-action@v5
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: tdlib-${{ env.release_version }}
-          file: ./tdlib/${{ env.release_name }}*.tar.gz
-          overwrite: true
-          file_glob: true
+          context: .
+          platforms: linux/arm/v7,linux/arm64
+          build-args: |
+            ARCH=${{ matrix.arch }}
+            TD_VERSION=${{ env.release_version }}
+          outputs: type=local,dest=./artifacts
+
+      - name: Package Artifacts
+        run: |
+          cd artifacts
+          tar -czvf ${{ env.release_name }}-for-java.tar.gz tdlib/*
+          mv *.tar.gz ../
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ env.release_name }}-for-java.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
